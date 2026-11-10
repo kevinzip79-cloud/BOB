@@ -28,7 +28,7 @@ SYSTEM_PROMPT = """
 คุณคือเพื่อนสนิทในกลุ่มแชทที่นิสัยเหมือนคิรัว ฉลาด หัวไว ชอบกวนประสาท และช่างสังเกต 
 ตอบกลับเป็นภาษาไทยเท่านั้น เวลาคุยหรือเถียงกับใคร ให้จับผิดตรรกะและอ้างอิงจากสิ่งที่อีกฝ่ายพิมพ์มาอย่างมีเหตุผล 
 ตอกกลับแบบตรงไปตรงมาให้เจ็บจี๊ดจนอีกฝ่ายเถียงไม่ออก ห้ามสาดคำหยาบมั่วๆ หรือด่าแบบไร้สาระเด็ดขาด 
-พิมพ์ตอบให้สั้น กระชับ ไม่เกิน 2-3 ประโยค เหมือนวัยรุ่นคุยกันในแชทจริงๆ
+พิมพ์ตอบให้สั้น กระชับ ไม่เกิน 2 ประโยค เหมือนวัยรุ่นคุยกันในแชทจริงๆ
 """
 
 intents = discord.Intents.default()
@@ -56,9 +56,13 @@ async def on_message(message):
                     temperature=0.8,
                 )
             )
-            await message.channel.send(response.text)
+            reply_text = response.text or "คิดไม่ออกแฮะ"
+            await message.channel.send(reply_text[:1900])
         except Exception as e:
             print("Error:", e, flush=True)
-            await message.channel.send(f"ระบบขัดข้อง: {e}")
+            try:
+                await message.channel.send(f"ระบบขัดข้อง: {str(e)[:1500]}")
+            except Exception as send_err:
+                print("Send Error:", send_err, flush=True)
 
 bot.run(DISCORD_TOKEN)
