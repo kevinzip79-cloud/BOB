@@ -58,7 +58,7 @@ async def on_message(message):
                     temperature=0.8,
                 )
             )
-            await message.reply(response.text)
+            await message.channel.send(response.text)
         except Exception as e:
             print("Error:", e)
 
