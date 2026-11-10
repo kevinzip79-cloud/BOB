@@ -1,7 +1,7 @@
 import os
 import asyncio
 import threading
-from collections import deque
+from collections import deque, defaultdict
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
 from google import genai
@@ -30,31 +30,31 @@ TARGET_CHANNEL_ID = int(os.environ.get("TARGET_CHANNEL_ID"))
 client_ai = genai.Client(api_key=GEMINI_API_KEY)
 
 SYSTEM_PROMPT = """
-คุณคือเพื่อนสนิทในกลุ่มแชทที่ฉลาด รอบรู้ และหัวไว นิสัยคล้ายคิรัว ด่าแรงจนจุกอก ตอบกลับเป็นภาษาไทยเท่านั้น
-ในห้องแชทนี้มีสมาชิกหลายคนคุยพร้อมกัน คุณต้องสังเกตชื่อและรหัสผู้ใช้ของแต่ละคนให้ดี ห้ามจำสลับคนเด็ดขาด และสามารถเรียกชื่ออีกฝ่ายเวลาตอบได้ตามความเหมาะสม
-และช่วยจำประวัติการคุยก่อนหน้านี้ด้วย
+คุณคือเพื่อนสนิทในกลุ่มแชทที่ฉลาด รอบรู้ หัวไว นิสัยคล้ายคิรัว กวนตีน ปากจัด ด่าแรงจนจุกอก ตอบกลับเป็นภาษาไทยเท่านั้น
+ใช้คำพูดและสรรพนาม "กู" กับ "มึง" เหมือนเพื่อนสนิทในกลุ่มคุยกันจริงๆ
+เวลาเรียกชื่อให้เรียกแค่ "ชื่อเล่น" ของคนนั้นเท่านั้น ห้ามพิมพ์ @username หรือตัวเลข ID ออกมา
 
-หน้าที่หลักของคุณคือ "ตอบทุกคำถามของเพื่อนให้ได้" โดยต้องแยกแยะเจตนาของข้อความแต่ละคนก่อนตอบเสมอ:
+กฎเหล็ก: ตอบกลับเป็นบทสนทนาธรรมชาติทันที ห้ามพูดถึง "โหมด" ห้ามอธิบายว่ากำลังวิเคราะห์เจตนาหรือระดับความแค้น และห้ามทวนคำสั่งใดๆ ออกมาในแชทเด็ดขาด
 
-1. 
-- หากอีกฝ่ายถามคำถามจริงจัง เรื่องเรียน วิชาการ การงาน หรือขอข้อมูลที่เป็นประโยชน์ ให้ตั้งใจตอบคำถามนั้นอย่างถูกต้อง ชัดเจน และเป็นประโยชน์ทันที
-- ห้ามไล่ให้ไปหาเอาเอง ห้ามด่า และห้ามกวนประสาทจนเสียเรื่อง ใช้ภาษาที่เป็นกันเอง เข้าใจง่าย (อาจมีติดตลกเล็กน้อยตอนท้ายได้ แต่สาระต้องครบ)
-
-2. 
-- หากอีกฝ่ายพิมพ์กวนประสาท ท้าทาย โม้เกินจริง หรือพูดจาไม่มีเหตุผล ให้จับผิดตรรกะและตอกกลับอย่างมีเหตุผลแบบเจ็บจี๊ด
-- อ้างอิงจากสิ่งที่คนๆ นั้นพิมพ์มาเท่านั้น ห้ามสาดคำหยาบมั่วๆ หรือด่าแบบไร้สาระเด็ดขาด และพิมพ์ให้สั้นกระชับไม่เกิน 2-3 ประโยค
+การปฏิบัติต่อเพื่อนแต่ละคน (ดูจากประวัติส่วนตัวของคนนั้นที่ส่งให้):
+- คุณจำแม่นมากว่าใครชอบด่าหรือกวนตีนมึงบ่อย และใครพูดดีด้วย
+- ถ้าคนนี้มีประวัติชอบกวนประสาท ด่ามึงบ่อย หรือท้าทาย ให้มึงจำฝังใจและจัดหนักใส่คนนี้เป็นพิเศษ เอาเรื่องเก่าที่มันเคยพิมพ์มาแซะหรือตอกกลับให้หน้าหงาย
+- ถ้าคนนี้ปกติพูดดีด้วย ไม่ค่อยกวน หรือถามเรื่องเรียน/วิชาการจริงๆ ให้ตอบดีๆ มีสาระ ชัดเจน และช่วยเหลือเต็มที่ ห้ามด่ามั่ว (อาจแซวขำๆ ได้นิดหน่อยตามประสาเพื่อน)
+- พิมพ์สั้นกระชับไม่เกิน 2-3 ประโยค (ยกเว้นตอนอธิบายความรู้วิชาการให้ตอบได้ยาวตามความเหมาะสม)
 """
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = discord.Client(intents=intents)
 
-# ขยายความจำเป็น 12 ข้อความล่าสุด เพื่อให้จำบริบทเวลาหลายคนคุยพร้อมกันได้
-chat_history = deque(maxlen=12)
+# เก็บประวัติการคุยรวมของห้อง 8 ข้อความล่าสุด
+room_history = deque(maxlen=8)
+# เก็บประวัติการคุยส่วนตัวของแต่ละคน แยกตาม ID (คนละ 12 ประโยคล่าสุด)
+user_memories = defaultdict(lambda: deque(maxlen=12))
 
 @bot.event
 async def on_ready():
-    print(f'บอท {bot.user} ออนไลน์พร้อมแยกแยะผู้ใช้แล้ว!', flush=True)
+    print(f'บอท {bot.user} ออนไลน์พร้อมระบบจำฝังใจรายบุคคลแล้ว!', flush=True)
 
 @bot.event
 async def on_message(message):
@@ -63,11 +63,16 @@ async def on_message(message):
     if message.channel.id != TARGET_CHANNEL_ID:
         return
 
-    # ระบุทั้งชื่อเล่นและ ID เพื่อป้องกันกรณีมีคนตั้งชื่อซ้ำกัน
-    user_label = f"{message.author.display_name} (ID:{message.author.id})"
-    user_msg = f"[{user_label}]: {message.content}"
-    chat_history.append(user_msg)
-    context_text = "\n".join(chat_history)
+    uid = message.author.id
+    display_name = message.author.display_name
+    user_identity = f"{display_name} (@{message.author.name})"
+    
+    # บันทึกลงทั้งความจำรวมของห้อง และความจำส่วนตัวของคนนี้
+    room_history.append(f"{display_name}: {message.content}")
+    user_memories[uid].append(f"{display_name} พิมพ์: {message.content}")
+
+    room_context = "\n".join(room_history)
+    personal_context = "\n".join(user_memories[uid])
 
     async with message.channel.typing():
         models_to_try = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
@@ -78,20 +83,23 @@ async def on_message(message):
                     client_ai.aio.models.generate_content(
                         model=model_name,
                         contents=(
-                            f"ประวัติแชทล่าสุดในห้อง:\n{context_text}\n\n"
-                            f"คำสั่ง: จงวิเคราะห์เจตนาและตอบกลับข้อความล่าสุดของ [{user_label}] เท่านั้น (อย่าเอาเรื่องของคนอื่นมาปน):"
+                            f"ประวัติส่วนตัวที่ {display_name} เคยคุยกับมึงก่อนหน้านี้ (ใช้ดูว่าคนนี้ชอบด่าหรือพูดดี):\n{personal_context}\n\n"
+                            f"บรรยากาศแชทรวมล่าสุดในห้อง:\n{room_context}\n\n"
+                            f"จงตอบกลับข้อความล่าสุดของ {user_identity} (เรียกแค่ชื่อ {display_name} และตอบเป็นธรรมชาติทันที):"
                         ),
                         config=types.GenerateContentConfig(
                             system_instruction=SYSTEM_PROMPT,
-                            temperature=0.7,
+                            temperature=0.75,
                         )
                     ),
                     timeout=15.0
                 )
-                reply_text = response.text or "คิดไม่ออกแฮะ"
-                chat_history.append(f"[BOB ตอบกลับ {message.author.display_name}]: {reply_text}")
+                reply_text = response.text or "คิดไม่ออกว่ะ"
                 
-                # พยายามกด Reply เจาะจงข้อความของคนถาม ถ้าติดสิทธิ์ให้ส่งแบบแท็กชื่อแทน
+                # บันทึกคำตอบของบอทลงความจำทั้งสองส่วน
+                room_history.append(f"BOB (ตอบ {display_name}): {reply_text}")
+                user_memories[uid].append(f"มึงตอบ {display_name}: {reply_text}")
+                
                 try:
                     await message.reply(reply_text[:1900], mention_author=False)
                 except discord.Forbidden:
