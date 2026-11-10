@@ -49,7 +49,8 @@ async def on_message(message):
     async with message.channel.typing():
         try:
             response = client_ai.models.generate_content(
-                model="gemini-2.5-flash",
+                model="model="gemini-3.8-flash",
+
                 contents=f"{message.author.display_name} พิมพ์ว่า: {message.content}",
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_PROMPT,
