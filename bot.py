@@ -5,7 +5,6 @@ import discord
 from google import genai
 from google.genai import types
 
-# ส่วนจำลองเว็บเพื่อให้รันบน Render แพ็กเกจฟรีได้
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -19,7 +18,6 @@ def run_web_server():
 
 threading.Thread(target=run_web_server, daemon=True).start()
 
-# ส่วนการทำงานของบอท Discord
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TARGET_CHANNEL_ID = int(os.environ.get("TARGET_CHANNEL_ID"))
@@ -39,7 +37,7 @@ bot = discord.Client(intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f'บอท {bot.user} ออนไลน์พร้อมเถียงแล้ว!')
+    print(f'บอท {bot.user} ออนไลน์พร้อมเถียงแล้ว!', flush=True)
 
 @bot.event
 async def on_message(message):
@@ -60,6 +58,7 @@ async def on_message(message):
             )
             await message.channel.send(response.text)
         except Exception as e:
-            print("Error:", e)
+            print("Error:", e, flush=True)
+            await message.channel.send(f"ระบบขัดข้อง: {e}")
 
 bot.run(DISCORD_TOKEN)
