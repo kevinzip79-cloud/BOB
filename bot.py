@@ -47,22 +47,30 @@ async def on_message(message):
         return
 
     async with message.channel.typing():
-        try:
-            response = client_ai.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=f"{message.author.display_name} พิมพ์ว่า: {message.content}",
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    temperature=0.8,
-                )
-            )
-            reply_text = response.text or "คิดไม่ออกแฮะ"
-            await message.channel.send(reply_text[:1900])
-        except Exception as e:
-            print("Error:", e, flush=True)
+        models_to_try = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
+        last_error = None
+
+        for model_name in models_to_try:
             try:
-                await message.channel.send(f"ระบบขัดข้อง: {str(e)[:1500]}")
-            except Exception as send_err:
-                print("Send Error:", send_err, flush=True)
+                response = client_ai.models.generate_content(
+                    model=model_name,
+                    contents=f"{message.author.display_name} พิมพ์ว่า: {message.content}",
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        temperature=0.8,
+                    )
+                )
+                reply_text = response.text or "คิดไม่ออกแฮะ"
+                await message.channel.send(reply_text[:1900])
+                return
+            except Exception as e:
+                last_error = e
+                print(f"Model {model_name} failed: {e}", flush=True)
+                continue
+
+        try:
+            await message.channel.send(f"ตอนนี้คนใช้ AI เยอะ ลองพิมพ์ใหม่อีกทีนะ ({str(last_error)[:200]})")
+        except Exception:
+            pass
 
 bot.run(DISCORD_TOKEN)
