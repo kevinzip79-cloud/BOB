@@ -1,5 +1,6 @@
 import os
 import threading
+from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
 from google import genai
@@ -35,6 +36,9 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = discord.Client(intents=intents)
 
+# เก็บประวัติการคุยล่าสุด 6 ข้อความเพื่อให้บอทจำบริบทได้
+chat_history = deque(maxlen=6)
+
 @bot.event
 async def on_ready():
     print(f'บอท {bot.user} ออนไลน์พร้อมเถียงแล้ว!', flush=True)
@@ -46,31 +50,31 @@ async def on_message(message):
     if message.channel.id != TARGET_CHANNEL_ID:
         return
 
-    async with message.channel.typing():
-        models_to_try = ["gemini-3.8-flash", "gemini-3.5-flash-lite"]
-        last_error = None
+    user_msg = f"{message.author.display_name}: {message.content}"
+    chat_history.append(user_msg)
+    context_text = "\n".join(chat_history)
 
+    async with message.channel.typing():
+        models_to_try = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
+        
         for model_name in models_to_try:
             try:
                 response = client_ai.models.generate_content(
                     model=model_name,
-                    contents=f"{message.author.display_name} พิมพ์ว่า: {message.content}",
+                    contents=f"ประวัติแชทล่าสุด:\n{context_text}\n\nจงตอบกลับข้อความล่าสุดของ {message.author.display_name}:",
                     config=types.GenerateContentConfig(
                         system_instruction=SYSTEM_PROMPT,
                         temperature=0.8,
                     )
                 )
                 reply_text = response.text or "คิดไม่ออกแฮะ"
+                chat_history.append(f"BOB: {reply_text}")
                 await message.channel.send(reply_text[:1900])
                 return
             except Exception as e:
-                last_error = e
                 print(f"Model {model_name} failed: {e}", flush=True)
                 continue
 
-        try:
-            await message.channel.send(f"ตอนนี้คนใช้ AI เยอะ ลองพิมพ์ใหม่อีกทีนะ ({str(last_error)[:200]})")
-        except Exception:
-            pass
+        await message.channel.send("สมองค้างแป๊บ คนใช้เยอะ ลองพิมพ์ใหม่อีกทีนะ")
 
 bot.run(DISCORD_TOKEN)
