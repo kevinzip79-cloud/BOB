@@ -1,4 +1,5 @@
 import os
+import asyncio
 import threading
 from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -11,6 +12,9 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Bot is alive!")
+
+    def log_message(self, format, *args):
+        return
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -36,7 +40,6 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = discord.Client(intents=intents)
 
-# เก็บประวัติการคุยล่าสุด 6 ข้อความเพื่อให้บอทจำบริบทได้
 chat_history = deque(maxlen=6)
 
 @bot.event
@@ -59,22 +62,28 @@ async def on_message(message):
         
         for model_name in models_to_try:
             try:
-                response = client_ai.models.generate_content(
-                    model=model_name,
-                    contents=f"ประวัติแชทล่าสุด:\n{context_text}\n\nจงตอบกลับข้อความล่าสุดของ {message.author.display_name}:",
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        temperature=0.8,
-                    )
+                response = await asyncio.wait_for(
+                    client_ai.aio.models.generate_content(
+                        model=model_name,
+                        contents=f"ประวัติแชทล่าสุด:\n{context_text}\n\nจงตอบกลับข้อความล่าสุดของ {message.author.display_name}:",
+                        config=types.GenerateContentConfig(
+                            system_instruction=SYSTEM_PROMPT,
+                            temperature=0.8,
+                        )
+                    ),
+                    timeout=15.0
                 )
                 reply_text = response.text or "คิดไม่ออกแฮะ"
                 chat_history.append(f"BOB: {reply_text}")
                 await message.channel.send(reply_text[:1900])
                 return
+            except asyncio.TimeoutError:
+                print(f"Model {model_name} timed out", flush=True)
+                continue
             except Exception as e:
                 print(f"Model {model_name} failed: {e}", flush=True)
                 continue
 
-        await message.channel.send("สมองค้างแป๊บ คนใช้เยอะ ลองพิมพ์ใหม่อีกทีนะ")
+        await message.channel.send("เน็ตฝั่ง AI ช้าจัด ลองพิมพ์ใหม่อีกทีนะ")
 
 bot.run(DISCORD_TOKEN)
