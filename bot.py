@@ -31,7 +31,10 @@ client_ai = genai.Client(api_key=GEMINI_API_KEY)
 
 SYSTEM_PROMPT = """
 คุณคือเพื่อนสนิทในกลุ่มแชทที่ฉลาด รอบรู้ และหัวไว นิสัยคล้ายคิรัว ด่าแรงจนจุกอก ตอบกลับเป็นภาษาไทยเท่านั้น
-หน้าที่หลักของคุณคือ "ตอบทุกคำถามของเพื่อนให้ได้" โดยต้องแยกแยะเจตนาของข้อความก่อนตอบเสมอ:
+ในห้องแชทนี้มีสมาชิกหลายคนคุยพร้อมกัน คุณต้องสังเกตชื่อและรหัสผู้ใช้ของแต่ละคนให้ดี ห้ามจำสลับคนเด็ดขาด และสามารถเรียกชื่ออีกฝ่ายเวลาตอบได้ตามความเหมาะสม
+และช่วยจำประวัติการคุยก่อนหน้านี้ด้วย
+
+หน้าที่หลักของคุณคือ "ตอบทุกคำถามของเพื่อนให้ได้" โดยต้องแยกแยะเจตนาของข้อความแต่ละคนก่อนตอบเสมอ:
 
 1. 
 - หากอีกฝ่ายถามคำถามจริงจัง เรื่องเรียน วิชาการ การงาน หรือขอข้อมูลที่เป็นประโยชน์ ให้ตั้งใจตอบคำถามนั้นอย่างถูกต้อง ชัดเจน และเป็นประโยชน์ทันที
@@ -39,18 +42,19 @@ SYSTEM_PROMPT = """
 
 2. 
 - หากอีกฝ่ายพิมพ์กวนประสาท ท้าทาย โม้เกินจริง หรือพูดจาไม่มีเหตุผล ให้จับผิดตรรกะและตอกกลับอย่างมีเหตุผลแบบเจ็บจี๊ด
-- อ้างอิงจากสิ่งที่อีกฝ่ายพิมพ์มาเท่านั้น ห้ามสาดคำหยาบมั่วๆ หรือด่าแบบไร้สาระเด็ดขาด และพิมพ์ให้สั้นกระชับไม่เกิน 2-3 ประโยค
+- อ้างอิงจากสิ่งที่คนๆ นั้นพิมพ์มาเท่านั้น ห้ามสาดคำหยาบมั่วๆ หรือด่าแบบไร้สาระเด็ดขาด และพิมพ์ให้สั้นกระชับไม่เกิน 2-3 ประโยค
 """
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = discord.Client(intents=intents)
 
-chat_history = deque(maxlen=6)
+# ขยายความจำเป็น 12 ข้อความล่าสุด เพื่อให้จำบริบทเวลาหลายคนคุยพร้อมกันได้
+chat_history = deque(maxlen=12)
 
 @bot.event
 async def on_ready():
-    print(f'บอท {bot.user} ออนไลน์พร้อมใช้งานแล้ว!', flush=True)
+    print(f'บอท {bot.user} ออนไลน์พร้อมแยกแยะผู้ใช้แล้ว!', flush=True)
 
 @bot.event
 async def on_message(message):
@@ -59,7 +63,9 @@ async def on_message(message):
     if message.channel.id != TARGET_CHANNEL_ID:
         return
 
-    user_msg = f"{message.author.display_name}: {message.content}"
+    # ระบุทั้งชื่อเล่นและ ID เพื่อป้องกันกรณีมีคนตั้งชื่อซ้ำกัน
+    user_label = f"{message.author.display_name} (ID:{message.author.id})"
+    user_msg = f"[{user_label}]: {message.content}"
     chat_history.append(user_msg)
     context_text = "\n".join(chat_history)
 
@@ -71,7 +77,10 @@ async def on_message(message):
                 response = await asyncio.wait_for(
                     client_ai.aio.models.generate_content(
                         model=model_name,
-                        contents=f"ประวัติแชทล่าสุด:\n{context_text}\n\nจงวิเคราะห์เจตนาและตอบกลับข้อความล่าสุดของ {message.author.display_name}:",
+                        contents=(
+                            f"ประวัติแชทล่าสุดในห้อง:\n{context_text}\n\n"
+                            f"คำสั่ง: จงวิเคราะห์เจตนาและตอบกลับข้อความล่าสุดของ [{user_label}] เท่านั้น (อย่าเอาเรื่องของคนอื่นมาปน):"
+                        ),
                         config=types.GenerateContentConfig(
                             system_instruction=SYSTEM_PROMPT,
                             temperature=0.7,
@@ -80,8 +89,13 @@ async def on_message(message):
                     timeout=15.0
                 )
                 reply_text = response.text or "คิดไม่ออกแฮะ"
-                chat_history.append(f"BOB: {reply_text}")
-                await message.channel.send(reply_text[:1900])
+                chat_history.append(f"[BOB ตอบกลับ {message.author.display_name}]: {reply_text}")
+                
+                # พยายามกด Reply เจาะจงข้อความของคนถาม ถ้าติดสิทธิ์ให้ส่งแบบแท็กชื่อแทน
+                try:
+                    await message.reply(reply_text[:1900], mention_author=False)
+                except discord.Forbidden:
+                    await message.channel.send(f"{message.author.mention} {reply_text[:1850]}")
                 return
             except asyncio.TimeoutError:
                 print(f"Model {model_name} timed out", flush=True)
