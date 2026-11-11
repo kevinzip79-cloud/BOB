@@ -1,7 +1,9 @@
 import os
+import sys
 import random
 import asyncio
 import threading
+import traceback
 from datetime import datetime, timezone, timedelta
 from collections import deque, defaultdict
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -25,9 +27,13 @@ def run_web_server():
 
 threading.Thread(target=run_web_server, daemon=True).start()
 
-DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-TARGET_CHANNEL_ID = int(os.environ.get("TARGET_CHANNEL_ID"))
+try:
+    DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "").strip()
+    GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+    TARGET_CHANNEL_ID = int(os.environ.get("TARGET_CHANNEL_ID", "0").strip())
+except Exception as e:
+    print(f"ENV ERROR: {e}", flush=True)
+    sys.exit(1)
 
 client_ai = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -52,12 +58,9 @@ SYSTEM_PROMPT = """
 - สามารถใส่อีโมจิท้ายประโยคได้นานๆ ที แต่อย่าใส่ทุกประโยค
 """
 
-SAFETY_SETTINGS = [
-    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-]
+intents = discord.Intents.default()
+intents.message_content = True
+bot = discord.Client(intents=intents)
 
 room_history = deque(maxlen=12)
 user_records = defaultdict(lambda: {
@@ -69,6 +72,7 @@ user_records = defaultdict(lambda: {
 pending_messages = defaultdict(list)
 user_tasks = {}
 last_activity_time = datetime.now(timezone.utc)
+idle_task_started = False
 
 def get_thai_time_str():
     tz_thai = timezone(timedelta(hours=7))
@@ -99,44 +103,6 @@ async def extract_images_from_messages(msgs):
                 except Exception as e:
                     print(f"Failed to read image: {e}", flush=True)
     return image_parts
-
-class BobClient(discord.Client):
-    async def setup_hook(self):
-        self.bg_task = self.loop.create_task(self.idle_chatter_loop())
-
-    async def idle_chatter_loop(self):
-        await self.wait_until_ready()
-        tz_thai = timezone(timedelta(hours=7))
-        while not self.is_closed():
-            await asyncio.sleep(1800)
-            now_utc = datetime.now(timezone.utc)
-            now_thai = datetime.now(tz_thai)
-            idle_seconds = (now_utc - last_activity_time).total_seconds()
-
-            if idle_seconds > 7200 and 10 <= now_thai.hour <= 23 and random.random() < 0.30:
-                channel = self.get_channel(TARGET_CHANNEL_ID)
-                if channel:
-                    try:
-                        response = await asyncio.wait_for(
-                            client_ai.aio.models.generate_content(
-                                model="gemini-3.5-flash-lite",
-                                contents=f"ตอนนี้เวลา {get_thai_time_str()} ห้องแชทเงียบกริบไม่มีใครคุยมา 2 ชั่วโมงแล้ว จงพิมพ์บ่นลอยๆ หรือทักชวนเพื่อนในกลุ่มคุยแบบกวนๆ สั้นๆ 1 ประโยค:",
-                                config=types.GenerateContentConfig(
-                                    system_instruction=SYSTEM_PROMPT,
-                                    safety_settings=SAFETY_SETTINGS,
-                                    temperature=0.9,
-                                )
-                            ),
-                            timeout=15.0
-                        )
-                        if response.text:
-                            await channel.send(response.text.strip()[:500])
-                    except Exception:
-                        pass
-
-intents = discord.Intents.default()
-intents.message_content = True
-bot = BobClient(intents=intents)
 
 async def process_user_messages(channel, author):
     await asyncio.sleep(2.0)
@@ -197,7 +163,6 @@ async def process_user_messages(channel, author):
                         contents=contents_payload,
                         config=types.GenerateContentConfig(
                             system_instruction=SYSTEM_PROMPT,
-                            safety_settings=SAFETY_SETTINGS,
                             temperature=0.85,
                         )
                     ),
@@ -229,4 +194,57 @@ async def process_user_messages(channel, author):
             except Exception as e:
                 print(f"Model {model_name} failed: {e}", flush=True)
                 continue
+
+        await channel.send("สมองค้างแป๊บ คนใช้เยอะ ลองพิมพ์ใหม่อีกทีนะ")
+
+async def idle_chatter_loop():
+    tz_thai = timezone(timedelta(hours=7))
+    while not bot.is_closed():
+        await asyncio.sleep(1800)
+        now_utc = datetime.now(timezone.utc)
+        now_thai = datetime.now(tz_thai)
+        idle_seconds = (now_utc - last_activity_time).total_seconds()
+
+        if idle_seconds > 7200 and 10 <= now_thai.hour <= 23 and random.random() < 0.30:
+            channel = bot.get_channel(TARGET_CHANNEL_ID)
+            if channel:
+                try:
+                    response = await asyncio.wait_for(
+                        client_ai.aio.models.generate_content(
+                            model="gemini-3.5-flash-lite",
+                            contents=f"ตอนนี้เวลา {get_thai_time_str()} ห้องแชทเงียบกริบไม่มีใครคุยมา 2 ชั่วโมงแล้ว จงพิมพ์บ่นลอยๆ หรือทักชวนเพื่อนในกลุ่มคุยแบบกวนๆ สั้นๆ 1 ประโยค:",
+                            config=types.GenerateContentConfig(
+                                system_instruction=SYSTEM_PROMPT,
+                                temperature=0.9,
+                            )
+                        ),
+                        timeout=15.0
+                    )
+                    if response.text:
+                        await channel.send(response.text.strip()[:500])
+                except Exception:
+                    pass
+
+@bot.event
+async def on_ready():
+    global idle_task_started
+    print(f'บอท {bot.user} ออนไลน์พร้อมลุยเต็มระบบแล้ว!', flush=True)
+    if not idle_task_started:
+        idle_task_started = True
+        asyncio.create_task(idle_chatter_loop())
+
+@bot.event
+async def on_message(message):
+    global last_activity_time
+    if message.author.bot:
+        return
+    if message.channel.id != TARGET_CHANNEL_ID:
+        return
+
+    last_activity_time = datetime.now(timezone.utc)
+    uid = message.author.id
+    pending_messages[uid].append(message)
+
+    if uid in user_tasks and not user_tasks[uid].done():
+        user_tasks[uid].cancel()
 
