@@ -140,18 +140,18 @@ bot = BobClient(intents=intents)
 
 async def process_user_messages(channel, author):
     await asyncio.sleep(2.0)
-    
+
     uid = author.id
     msgs = pending_messages.pop(uid, [])
     user_tasks.pop(uid, None)
-    
+
     if not msgs:
         return
 
     combined_text = " ".join([m.content for m in msgs if m.content.strip()])
     image_parts = await extract_images_from_messages(msgs)
     last_message = msgs[-1]
-    
+
     if not combined_text and not image_parts:
         return
 
@@ -188,7 +188,7 @@ async def process_user_messages(channel, author):
 
     async with channel.typing():
         models_to_try = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
-        
+
         for model_name in models_to_try:
             try:
                 response = await asyncio.wait_for(
@@ -204,7 +204,7 @@ async def process_user_messages(channel, author):
                     timeout=18.0
                 )
                 reply_text = (response.text or "").strip()
-                
+
                 if not reply_text:
                     reply_text = f"คำพูดมึงแรงเกินระบบกรองกูรับไม่ได้ว่ะ {display_name} เอาใหม่ดิ๊"
 
@@ -212,14 +212,14 @@ async def process_user_messages(channel, author):
                 await asyncio.sleep(typing_delay)
 
                 room_history.append(f"บ็อบ (ตอบ {display_name}): {reply_text}")
-                
+
                 if need_reply:
                     try:
                         await last_message.reply(reply_text[:1900], mention_author=False)
                         return
                     except discord.Forbidden:
                         pass
-                
+
                 await channel.send(reply_text[:1900])
                 return
 
@@ -227,3 +227,6 @@ async def process_user_messages(channel, author):
                 print(f"Model {model_name} timed out", flush=True)
                 continue
             except Exception as e:
+                print(f"Model {model_name} failed: {e}", flush=True)
+                continue
+
