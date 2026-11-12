@@ -8,12 +8,14 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import discord
 from google import genai
 from google.genai import types
+from groq import AsyncGroq
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Bot is alive!")
+
     def do_HEAD(self):
         self.send_response(200)
         self.end_headers()
@@ -30,9 +32,11 @@ threading.Thread(target=run_web_server, daemon=True).start()
 
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 TARGET_CHANNEL_ID = int(os.environ.get("TARGET_CHANNEL_ID"))
 
 client_ai = genai.Client(api_key=GEMINI_API_KEY)
+client_groq = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 SYSTEM_PROMPT = """
 มึงคือคนจริงๆ ที่เป็นเพื่อนสนิทในกลุ่มแชทดิสคอร์ดนี้ ชื่อ "บ็อบ" (BOB) นิสัยฉลาด รอบรู้ หัวไว คล้ายคิรัว ปากจัด ด่าแรงจนจุกอก แต่พึ่งพาได้เวลาเพื่อนเดือดร้อน
@@ -83,8 +87,53 @@ def build_leaderboard_summary():
         lines.append(f"- {u['name']} (พิมพ์ {u['count']} ครั้ง) คำพูดล่าสุด: [{msgs_preview}]")
     return "\n".join(lines)
 
+async def ask_ai_with_fallback(prompt_text):
+    # 1. ลองใช้ Google Gemini ก่อน (เข้าใจภาษาไทยและมุกเนียนที่สุด)
+    gemini_models = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
+    for model_name in gemini_models:
+        try:
+            response = await asyncio.wait_for(
+                client_ai.aio.models.generate_content(
+                    model=model_name,
+                    contents=prompt_text,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_PROMPT,
+                        temperature=0.85,
+                    )
+                ),
+                timeout=10.0
+            )
+            if response.text and response.text.strip():
+                return response.text.strip()
+        except Exception as e:
+            print(f"Gemini {model_name} failed: {e}", flush=True)
+            continue
+
+    # 2. ถ้า Gemini ค้างหรือโควต้าเต็ม ให้สลับไปใช้ Groq (Llama 3.3) ทันที
+    if client_groq:
+        try:
+            chat_completion = await asyncio.wait_for(
+                client_groq.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt_text},
+                    ],
+                    model="llama-3.3-70b-versatile",
+                    temperature=0.85,
+                    max_tokens=600,
+                ),
+                timeout=10.0
+            )
+            reply = chat_completion.choices[0].message.content
+            if reply and reply.strip():
+                return reply.strip()
+        except Exception as e:
+            print(f"Groq fallback failed: {e}", flush=True)
+
+    return None
+
 async def process_user_messages(channel, author):
-    await asyncio.sleep(2.2)
+    await asyncio.sleep(2.0)
     
     uid = author.id
     msgs = pending_messages.pop(uid, [])
@@ -117,57 +166,37 @@ async def process_user_messages(channel, author):
     current_time = get_thai_time_str()
     need_reply = (channel.last_message_id != last_message.id)
 
+    prompt_text = (
+        f"เวลาปัจจุบันในไทย: {current_time}\n"
+        f"สมุดจดสถิติและวีรกรรมของทุกคนในห้อง:\n{all_users_summary}\n\n"
+        f"แชทล่าสุดในห้อง:\n{room_context}\n\n"
+        f"จงตอบกลับ {display_name} แบบคนจริงๆ ทันที (เวลาเรียกชื่อให้สะกดคำว่า {display_name} ตรงตัว ห้ามแปลงเป็นภาษาไทย):"
+    )
+
     async with channel.typing():
-        models_to_try = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
+        reply_text = await ask_ai_with_fallback(prompt_text)
         
-        for model_name in models_to_try:
+        if not reply_text:
+            await channel.send("สมองค้างแป๊บ คนใช้เยอะ ลองพิมพ์ใหม่อีกทีนะ")
+            return
+
+        typing_delay = min(len(reply_text) * 0.025, 2.5)
+        await asyncio.sleep(typing_delay)
+
+        room_history.append(f"บ็อบ (ตอบ {display_name}): {reply_text}")
+        
+        if need_reply:
             try:
-                response = await asyncio.wait_for(
-                    client_ai.aio.models.generate_content(
-                        model=model_name,
-                        contents=(
-                            f"เวลาปัจจุบันในไทย: {current_time}\n"
-                            f"สมุดจดสถิติและวีรกรรมของทุกคนในห้อง:\n{all_users_summary}\n\n"
-                            f"แชทล่าสุดในห้อง:\n{room_context}\n\n"
-                            f"จงตอบกลับ {display_name} แบบคนจริงๆ ทันที (เวลาเรียกชื่อให้สะกดคำว่า {display_name} ตรงตัว ห้ามแปลงเป็นภาษาไทย):"
-                        ),
-                        config=types.GenerateContentConfig(
-                            system_instruction=SYSTEM_PROMPT,
-                            temperature=0.85,
-                        )
-                    ),
-                    timeout=15.0
-                )
-                reply_text = (response.text or "").strip()
-                if not reply_text:
-                    reply_text = f"คำพูดมึงแรงเกินระบบกรองกูรับไม่ได้ว่ะ {display_name}"
-
-                typing_delay = min(len(reply_text) * 0.03, 3.5)
-                await asyncio.sleep(typing_delay)
-
-                room_history.append(f"บ็อบ (ตอบ {display_name}): {reply_text}")
-                
-                if need_reply:
-                    try:
-                        await last_message.reply(reply_text[:1900], mention_author=False)
-                        return
-                    except discord.Forbidden:
-                        pass
-                
-                await channel.send(reply_text[:1900])
+                await last_message.reply(reply_text[:1900], mention_author=False)
                 return
-
-            except asyncio.TimeoutError:
-                continue
-            except Exception as e:
-                print(f"Model {model_name} failed: {e}", flush=True)
-                continue
-
-        await channel.send("สมองค้างแป๊บ คนใช้เยอะ ลองพิมพ์ใหม่อีกทีนะ")
+            except discord.Forbidden:
+                pass
+        
+        await channel.send(reply_text[:1900])
 
 @bot.event
 async def on_ready():
-    print(f'บอท {bot.user} ออนไลน์ในโหมดคนจริง 100% แล้ว!', flush=True)
+    print(f'บอท {bot.user} ออนไลน์พร้อมสมองสำรอง 2 ค่ายแล้ว!', flush=True)
 
 @bot.event
 async def on_message(message):
