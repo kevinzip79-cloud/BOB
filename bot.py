@@ -88,7 +88,7 @@ def build_leaderboard_summary():
     return "\n".join(lines)
 
 async def ask_ai_with_fallback(prompt_text):
-    # 1. ลองใช้ Google Gemini ก่อน
+    # 1. ลองใช้ Google Gemini ก่อน (เพิ่มเวลารอเป็น 25 วินาที ไม่ตัดบทเร็วเกินไป)
     if client_ai:
         gemini_models = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
         for model_name in gemini_models:
@@ -102,34 +102,40 @@ async def ask_ai_with_fallback(prompt_text):
                             temperature=0.85,
                         )
                     ),
-                    timeout=10.0
+                    timeout=25.0
                 )
                 if response.text and response.text.strip():
                     return response.text.strip()
+            except asyncio.TimeoutError:
+                print(f"Gemini {model_name} timed out after 25s", flush=True)
+                continue
             except Exception as e:
-                print(f"Gemini {model_name} failed: {e}", flush=True)
+                print(f"Gemini {model_name} error: {e}", flush=True)
                 continue
 
-    # 2. สลับไปใช้ Groq (Llama 3.3) ทันทีเมื่อ Gemini ค้าง
+    # 2. สลับไปใช้ Groq รุ่นใหม่เมื่อ Gemini ค้าง
     if client_groq:
-        try:
-            chat_completion = await asyncio.wait_for(
-                client_groq.chat.completions.create(
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt_text},
-                    ],
-                    model="llama-3.3-70b-versatile",
-                    temperature=0.85,
-                    max_tokens=600,
-                ),
-                timeout=10.0
-            )
-            first_choice = next(iter(chat_completion.choices), None)
-            if first_choice and first_choice.message.content:
-                return first_choice.message.content.strip()
-        except Exception as e:
-            print(f"Groq fallback failed: {e}", flush=True)
+        groq_models = ["meta-llama/llama-4-scout-17b-16e-instruct", "llama-3.1-8b-instant"]
+        for g_model in groq_models:
+            try:
+                chat_completion = await asyncio.wait_for(
+                    client_groq.chat.completions.create(
+                        messages=[
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt_text},
+                        ],
+                        model=g_model,
+                        temperature=0.85,
+                        max_tokens=600,
+                    ),
+                    timeout=15.0
+                )
+                first_choice = next(iter(chat_completion.choices), None)
+                if first_choice and first_choice.message.content:
+                    return first_choice.message.content.strip()
+            except Exception as e:
+                print(f"Groq {g_model} failed: {e}", flush=True)
+                continue
 
     return None
 
