@@ -88,7 +88,7 @@ def build_leaderboard_summary():
     return "\n".join(lines)
 
 async def ask_ai_with_fallback(prompt_text):
-    # 1. ลองใช้ Google Gemini ก่อน (เพิ่มเวลารอเป็น 25 วินาที ไม่ตัดบทเร็วเกินไป)
+    # 1. ลองใช้ Google Gemini ก่อน
     if client_ai:
         gemini_models = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
         for model_name in gemini_models:
