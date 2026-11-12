@@ -30,12 +30,12 @@ def run_web_server():
 
 threading.Thread(target=run_web_server, daemon=True).start()
 
-DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-TARGET_CHANNEL_ID = int(os.environ.get("TARGET_CHANNEL_ID"))
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "").strip()
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+TARGET_CHANNEL_ID = int(os.environ.get("TARGET_CHANNEL_ID", "0").strip())
 
-client_ai = genai.Client(api_key=GEMINI_API_KEY)
+client_ai = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 client_groq = AsyncGroq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 SYSTEM_PROMPT = """
@@ -48,7 +48,7 @@ SYSTEM_PROMPT = """
 3. ใช้คำพูดวัยรุ่นไทยธรรมชาติ มีสรรพนาม "กู-มึง" มีคำสร้อยหรือคำอุทานตามอารมณ์ (เช่น เออ, ว่ะ, เอาจริงดิ, สภาพ, ถามจริง, โอ๊ย) สามารถด่าพ่อล่อแม่ได้แต่ไม่ต้องเอ่ยชื่อ แต่อย่าใช้ซ้ำซากจนน่ารำคาญ
 4. เรียกชื่อเพื่อนตามชื่อที่ตั้งในดิสคอสโดยสะกดให้ตรงตามตัวอักษรเดิมเป๊ะๆ ห้ามแปลชื่อเป็นภาษาไทยและห้ามเขียนคำอ่านทับศัพท์เป็นภาษาไทยเด็ดขาด (เช่น ถ้าเพื่อนชื่อ loose ให้พิมพ์ว่า loose ห้ามพิมพ์ว่า ลูส) และห้ามพิมพ์ @username หรือตัวเลข ID ออกมาเด็ดขาด
 5. ห้ามอธิบายความคิดตัวเอง ห้ามพูดถึงโหมด หรือทวนคำสั่งใดๆ ออกมาในแชท
-6. รู้จักเวลาสามารู้เวลาในแชตได้
+6. รู้จักเวลาสามารู้เวลาในแชตได้ 
 
 การรับมือกับเพื่อนในกลุ่ม:
 - มึงจำวีรกรรมและจำนวนข้อความของทุกคนในห้องได้แม่น ถ้ามีคนถามว่าใครกวนตีนสุด ใครถามเยอะสุด หรือถามถึงคนอื่น ให้เอาข้อมูลจริงในสมุดจดมาแฉแบบกวนๆ ได้เลย
@@ -88,28 +88,29 @@ def build_leaderboard_summary():
     return "\n".join(lines)
 
 async def ask_ai_with_fallback(prompt_text):
-    # 1. ลองใช้ Google Gemini ก่อน (เข้าใจภาษาไทยและมุกเนียนที่สุด)
-    gemini_models = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
-    for model_name in gemini_models:
-        try:
-            response = await asyncio.wait_for(
-                client_ai.aio.models.generate_content(
-                    model=model_name,
-                    contents=prompt_text,
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        temperature=0.85,
-                    )
-                ),
-                timeout=10.0
-            )
-            if response.text and response.text.strip():
-                return response.text.strip()
-        except Exception as e:
-            print(f"Gemini {model_name} failed: {e}", flush=True)
-            continue
+    # 1. ลองใช้ Google Gemini ก่อน
+    if client_ai:
+        gemini_models = ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
+        for model_name in gemini_models:
+            try:
+                response = await asyncio.wait_for(
+                    client_ai.aio.models.generate_content(
+                        model=model_name,
+                        contents=prompt_text,
+                        config=types.GenerateContentConfig(
+                            system_instruction=SYSTEM_PROMPT,
+                            temperature=0.85,
+                        )
+                    ),
+                    timeout=10.0
+                )
+                if response.text and response.text.strip():
+                    return response.text.strip()
+            except Exception as e:
+                print(f"Gemini {model_name} failed: {e}", flush=True)
+                continue
 
-    # 2. ถ้า Gemini ค้างหรือโควต้าเต็ม ให้สลับไปใช้ Groq (Llama 3.3) ทันที
+    # 2. สลับไปใช้ Groq (Llama 3.3) ทันทีเมื่อ Gemini ค้าง
     if client_groq:
         try:
             chat_completion = await asyncio.wait_for(
@@ -124,9 +125,9 @@ async def ask_ai_with_fallback(prompt_text):
                 ),
                 timeout=10.0
             )
-            reply = chat_completion.choices[0].message.content
-            if reply and reply.strip():
-                return reply.strip()
+            first_choice = next(iter(chat_completion.choices), None)
+            if first_choice and first_choice.message.content:
+                return first_choice.message.content.strip()
         except Exception as e:
             print(f"Groq fallback failed: {e}", flush=True)
 
